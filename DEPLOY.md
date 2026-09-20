@@ -225,7 +225,7 @@ El consumo del día se ve en vivo en `/admin`.
 | Los enlaces del email apuntan a localhost | `PUBLIC_BASE_URL` sin actualizar | Pon la URL pública real |
 | `no such file /models/nli-onnx/model.onnx` | Imagen construida a medias | Reconstruye sin caché: `docker build --no-cache .` |
 | El túnel no conecta con la app | Service mal puesto | Debe ser `http://app:8000`, no `localhost` |
-| El límite de intentos se agota con un solo usuario | `TRUST_PROXY_HEADERS=false` tras el túnel | Ponlo en `true`: si no, todas las visitas llegan con la IP de `cloudflared` y comparten cupo |
+| El límite de intentos se agota con un solo usuario | `TRUST_PROXY_HEADERS=false` tras el túnel | Ponlo en `true`: si no, todas las visitas llegan con la IP de `cloudflared` y comparten cupo. `docker-compose.yml` ya lo hace por ti |
 | "No se puede determinar la duración de ese medio" | Retransmisión en directo o metadatos ocultos | Es intencionado: sin duración conocida no hay tope de gasto. Sube el archivo |
 
 ---
@@ -245,6 +245,17 @@ El consumo del día se ve en vivo en `/admin`.
 - `AUTH_REQUESTS_PER_HOUR` limita por IP para que nadie te inunde el correo. Las
   cabeceras `CF-Connecting-IP` y `X-Forwarded-For` solo se creen si
   `TRUST_PROXY_HEADERS=true`; expuesto directamente serían falsificables.
+  Esa variable gobierna **las dos capas a la vez**: la comprobación de la
+  aplicación y los flags `--proxy-headers` de Uvicorn. Tiene que ser así: Uvicorn
+  reescribe `request.client.host` antes de que corra ningún código propio, así
+  que activarlo ahí de forma fija dejaría la variable en pura decoración.
+  `FORWARDED_ALLOW_IPS` permite además acotar qué peers pueden reenviar.
+- El tope de subida se aplica contando bytes en la capa ASGI, no solo mirando
+  `Content-Length`: una petición chunked o con la cabecera falseada también se
+  corta a mitad de transferencia.
+- Una duración que no sea un número finito y positivo (NaN, infinito, nula)
+  cuenta como desconocida y se rechaza. NaN es "verdadero" en Python y falla
+  toda comparación, así que sin esto se colaría entera.
 - Autorizar es un POST confirmado, no un GET: abrir el enlace no decide nada, así
   que un escáner de correo no puede aprobar a nadie por ti.
 - Los topes diarios se reservan con una operación atómica, de modo que dos

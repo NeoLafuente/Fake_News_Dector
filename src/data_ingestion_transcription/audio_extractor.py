@@ -3,6 +3,7 @@
 Downloads are bounded before a single byte is fetched — duration is read from
 the metadata probe and the download is refused if the media is too long.
 """
+import math
 import os
 import re
 import tempfile
@@ -19,6 +20,20 @@ DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "/tmp/factx-downloads")
 # ".." sequence; the extension keeps a single leading dot and nothing else.
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9_-]")
 _SAFE_EXT = re.compile(r"[^A-Za-z0-9]")
+
+
+def _finite_seconds(value) -> float:
+    """Coerce reported metadata to a usable duration, or 0.0 for 'unknown'.
+
+    Sites can report a duration of null, a string, NaN or infinity. NaN is
+    truthy and compares False against everything, so passing it straight to the
+    limit check would let it through.
+    """
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return seconds if math.isfinite(seconds) and seconds > 0 else 0.0
 
 
 def safe_filename(name: str, fallback_ext: str = ".bin") -> str:
@@ -53,7 +68,7 @@ class AudioExtractor:
         os.makedirs(output_path, exist_ok=True)
 
         info = self._probe(url)
-        duration = info.get("duration")
+        duration = _finite_seconds(info.get("duration"))
         # Fail closed. Treating an unknown duration as acceptable would let a
         # live stream or a site that hides its metadata walk straight past the
         # limit and start an unbounded download.

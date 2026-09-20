@@ -6,6 +6,7 @@ free tier with no card; any other OpenAI-compatible endpoint works by pointing
 TRANSCRIPTION_BASE_URL somewhere else.
 """
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -47,9 +48,15 @@ def probe_duration(audio_path: str) -> float:
             ],
             capture_output=True, text=True, timeout=30, check=True,
         )
-        return float(json.loads(out.stdout)["format"]["duration"])
-    except Exception:  # noqa: BLE001 - a missing duration must not be fatal
+        value = float(json.loads(out.stdout)["format"]["duration"])
+    except Exception:  # noqa: BLE001 - an unreadable duration must not be fatal
         return 0.0
+    # A crafted container can report "nan" or "inf". float() accepts both, NaN
+    # is truthy and every comparison against it is False, so either one would
+    # sail past the limit check. Treat them as unknown.
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return value
 
 
 def compress_for_upload(audio_path: str) -> str:
@@ -93,10 +100,11 @@ class RemoteTranscriber:
             )
 
         duration = probe_duration(audio_path)
-        # probe_duration returns 0.0 when ffprobe cannot read the file. Letting
-        # that through would mean MAX_AUDIO_SECONDS is not a bound at all, so an
-        # unmeasurable file is refused rather than sent to the paid API.
-        if not duration:
+        # Validate here rather than relying on probe_duration having done it:
+        # the bound should hold whatever produced the value. NaN is truthy and
+        # compares False against everything, and int(inf) raises, so neither
+        # can be allowed to reach the checks below.
+        if not math.isfinite(duration) or duration <= 0:
             raise TranscriptionError(
                 "No se puede leer la duración de ese audio, así que se rechaza por "
                 "precaución. Prueba con un formato estándar (mp3, wav, m4a, mp4)."

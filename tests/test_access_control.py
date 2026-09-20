@@ -402,3 +402,126 @@ def test_media_without_a_known_duration_is_refused(monkeypatch):
     monkeypatch.setattr(extractor, "_probe", lambda url: {"title": "directo"}, raising=False)
     with pytest.raises(TranscriptionError, match="duración"):
         extractor.download_and_extract_audio("https://example.com/live")
+
+
+# --- Body cap holds without a truthful Content-Length ----------------------
+
+def _chunked_multipart(total_bytes: int, boundary: str = "factxboundary"):
+    """A well-formed multipart upload streamed with no Content-Length."""
+    head = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="big.mp3"\r\n'
+        "Content-Type: audio/mpeg\r\n\r\n"
+    ).encode()
+    yield head
+    sent = 0
+    block = b"x" * (256 * 1024)
+    while sent < total_bytes:
+        sent += len(block)
+        yield block
+    yield f"\r\n--{boundary}--\r\n".encode()
+
+
+def test_chunked_multipart_upload_is_cut_off(client):
+    """No Content-Length to check, so the cap has to hold while bytes arrive."""
+    from src.security.config import settings
+
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    approve(client, "Eva")
+
+    over = settings.max_upload_mb * 1024 * 1024 + 4 * 1024 * 1024
+    response = client.post(
+        "/transcribe_only",
+        content=_chunked_multipart(over),
+        headers={"Content-Type": "multipart/form-data; boundary=factxboundary"},
+    )
+    assert response.status_code == 413, response.text
+    assert response.json()["code"] == "payload_too_large"
+
+
+def test_a_chunked_upload_under_the_cap_still_reaches_the_handler(client):
+    """The limiter must not break legitimate streamed uploads."""
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    approve(client, "Eva")
+
+    response = client.post(
+        "/transcribe_only",
+        content=_chunked_multipart(256 * 1024),
+        headers={"Content-Type": "multipart/form-data; boundary=factxboundary"},
+    )
+    # Past the size gate; it fails later for want of ffmpeg/API keys, not 413.
+    assert response.status_code != 413
+
+
+def test_unparseable_content_length_falls_through_to_counting():
+    """A junk header must not be read as 'small enough to skip the check'."""
+    import anyio
+
+    from src.security.middleware import BodySizeLimitMiddleware
+
+    async def never_reached(scope, receive, send):  # pragma: no cover
+        while True:
+            message = await receive()
+            if not message.get("more_body"):
+                break
+        raise AssertionError("el cuerpo no debería haberse leído entero")
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    chunks = [
+        {"type": "http.request", "body": b"y" * 900, "more_body": True}
+        for _ in range(5)
+    ]
+
+    async def receive():
+        return chunks.pop(0) if chunks else {"type": "http.request", "body": b""}
+
+    middleware = BodySizeLimitMiddleware(never_reached, max_bytes=1000)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "headers": [(b"content-length", b"not-a-number")],
+    }
+    anyio.run(middleware, scope, receive, send)
+
+    assert sent[0]["status"] == 413
+
+
+# --- Durations that are not real numbers -----------------------------------
+
+@pytest.mark.parametrize("hostile", ["nan", "inf", "-inf", "-5", "0", "abc", None])
+def test_non_finite_durations_count_as_unknown(hostile):
+    """NaN is truthy and compares False against everything: it must not pass."""
+    from src.data_ingestion_transcription.audio_extractor import _finite_seconds
+
+    assert _finite_seconds(hostile) == 0.0
+
+
+@pytest.mark.parametrize("hostile", [float("nan"), float("inf")])
+def test_non_finite_probe_is_refused_before_the_api_call(monkeypatch, hostile):
+    from src.data_ingestion_transcription import transcriber
+
+    monkeypatch.setattr(transcriber, "probe_duration", lambda path: hostile)
+    engine = transcriber.RemoteTranscriber(api_key="fake", base_url="http://unused")
+    with pytest.raises(transcriber.TranscriptionError, match="duración"):
+        engine.transcribe("/tmp/whatever.mp3")
+
+
+# --- The two proxy-trust layers must agree ---------------------------------
+
+def test_uvicorn_proxy_trust_is_not_hardcoded():
+    """Uvicorn rewrites client.host before app code runs.
+
+    If the image enabled --proxy-headers unconditionally, TRUST_PROXY_HEADERS
+    would be cosmetic and a directly exposed origin could still be spoofed.
+    """
+    import pathlib
+
+    dockerfile = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
+    cmd = dockerfile.read_text()
+    cmd = cmd[cmd.rindex("CMD "):]
+    assert "--proxy-headers" in cmd
+    assert "TRUST_PROXY_HEADERS" in cmd, "los flags de proxy deben depender de la variable"
