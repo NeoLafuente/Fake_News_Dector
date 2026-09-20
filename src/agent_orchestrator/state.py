@@ -13,6 +13,7 @@ class NLIAnalysis(TypedDict):
     claim: str
     urls: List[str]
     label: str
+    confidence: float
 
 class GraphState(TypedDict):
     raw_transcript: str

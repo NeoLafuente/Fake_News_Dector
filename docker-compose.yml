@@ -1,0 +1,44 @@
+# Runs the API plus the Cloudflare tunnel that publishes it.
+#
+#   docker compose pull && docker compose up -d
+#
+# The app port is never published to the host: the only way in is through the
+# tunnel, so `docker compose stop cloudflared` removes the site from the
+# internet entirely, independently of the in-app kill switch.
+
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/neolafuente/fake_news_dector:latest}
+    # Uncomment to build locally instead of pulling from the private registry.
+    # build: .
+    container_name: factx-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: 8000
+    volumes:
+      # Sessions, kill-switch state and daily counters survive restarts here.
+      - ./data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: factx-tunnel
+    restart: unless-stopped
+    # Point the tunnel's public hostname at http://app:8000 in the Cloudflare
+    # dashboard; the token carries the routing configuration.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      app:
+        condition: service_healthy

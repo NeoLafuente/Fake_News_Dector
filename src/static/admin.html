@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FactX · Panel de control</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0d0e15;--panel:rgba(20,22,30,.74);--border:rgba(255,255,255,.09);
+      --text:#fff;--muted:#9ea3b0;--primary:#6366f1;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);
+     min-height:100vh;padding:24px 16px}
+.wrap{max-width:900px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;
+       flex-wrap:wrap;margin-bottom:24px}
+h1{font-size:1.6rem;font-weight:800;letter-spacing:-.4px}
+h1 span{background:linear-gradient(90deg,#6366f1,#2dd4bf);-webkit-background-clip:text;
+        background-clip:text;-webkit-text-fill-color:transparent}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted);
+   margin-bottom:13px;font-weight:700}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:16px;
+      padding:22px;margin-bottom:18px;backdrop-filter:blur(14px)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+button{border:0;border-radius:10px;font-family:inherit;font-size:.9rem;font-weight:700;
+       padding:11px 18px;cursor:pointer;color:#fff;transition:transform .15s,opacity .2s}
+button:hover:not(:disabled){transform:translateY(-1px)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.b-on{background:var(--ok);color:#052e16}.b-off{background:var(--warn);color:#2a1a00}
+.b-kill{background:var(--bad)}.b-ok{background:var(--ok);color:#052e16}
+.b-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.b-sm{padding:7px 13px;font-size:.8rem}
+.panic{width:100%;background:linear-gradient(135deg,#ef4444,#b91c1c);padding:16px;
+       font-size:1rem;letter-spacing:.4px}
+input{padding:12px 14px;background:rgba(0,0,0,.34);color:var(--text);flex:1;min-width:200px;
+      border:1px solid var(--border);border-radius:10px;font-family:inherit;font-size:.92rem}
+input:focus{outline:none;border-color:var(--primary)}
+.status{display:inline-flex;align-items:center;gap:9px;font-weight:700;font-size:1.05rem}
+.dot{width:11px;height:11px;border-radius:50%}
+.dot.on{background:var(--ok);box-shadow:0 0 12px var(--ok);animation:pulse 1.8s infinite}
+.dot.off{background:var(--bad)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.item{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+      padding:13px 0;border-bottom:1px solid var(--border)}
+.item:last-child{border-bottom:0;padding-bottom:0}
+.item .who{font-weight:600}
+.item .meta{color:var(--muted);font-size:.8rem;margin-top:3px;word-break:break-all}
+.empty{color:var(--muted);font-size:.88rem;font-style:italic}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px}
+.stat{background:rgba(0,0,0,.28);border:1px solid var(--border);border-radius:12px;padding:14px}
+.stat .n{font-size:1.5rem;font-weight:800;font-variant-numeric:tabular-nums}
+.stat .l{color:var(--muted);font-size:.74rem;text-transform:uppercase;letter-spacing:.6px;margin-top:3px}
+.bar{height:5px;border-radius:3px;background:rgba(255,255,255,.1);margin-top:9px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--ok);transition:width .4s}
+.bar>i.hot{background:var(--warn)}.bar>i.max{background:var(--bad)}
+.left{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ok)}
+.left.low{color:var(--warn)}
+.log{font-family:ui-monospace,Menlo,monospace;font-size:.76rem;color:var(--muted);
+     max-height:190px;overflow-y:auto;line-height:1.85}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#181b24;
+       border:1px solid var(--border);border-radius:11px;padding:13px 22px;font-size:.88rem;
+       opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
+.toast.show{opacity:1}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Fact<span>X</span> · Panel</h1>
+    <button class="b-ghost b-sm" id="forget-btn">Olvidar token</button>
+  </header>
+
+  <!-- Login -->
+  <section id="gate" class="card">
+    <h2>Token de administrador</h2>
+    <div class="row">
+      <input id="token-input" type="password" placeholder="ADMIN_TOKEN" autocomplete="off">
+      <button class="b-ok" id="token-btn">Entrar</button>
+    </div>
+    <p class="empty" id="gate-msg" style="margin-top:12px"></p>
+  </section>
+
+  <!-- Panel -->
+  <div id="panel" class="hidden">
+
+    <section class="card">
+      <div class="row">
+        <div>
+          <h2 style="margin-bottom:8px">Estado del servicio</h2>
+          <div class="status"><span class="dot off" id="web-dot"></span><span id="web-label">—</span></div>
+        </div>
+        <button id="web-btn" class="b-on">Encender</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Solicitudes pendientes <span id="pending-count"></span></h2>
+      <div id="pending-list"><p class="empty">Nada pendiente.</p></div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="margin-bottom:13px">
+        <h2 style="margin:0">Sesiones activas</h2>
+        <button class="b-kill b-sm" id="killall-btn">Cerrar todas</button>
+      </div>
+      <div id="sessions-list"><p class="empty">Nadie conectado.</p></div>
+    </section>
+
+    <section class="card">
+      <h2>Consumo de hoy (UTC)</h2>
+      <div class="grid" id="budgets"></div>
+    </section>
+
+    <section class="card">
+      <h2>Actividad reciente</h2>
+      <div class="log" id="audit"></div>
+    </section>
+
+    <section class="card">
+      <button class="panic" id="panic-btn">🛑 PARADA DE EMERGENCIA</button>
+      <p class="empty" style="margin-top:11px;text-align:center">
+        Apaga la web y cierra todas las sesiones al instante.</p>
+    </section>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const KEY = "factx_admin_token";
+let token = localStorage.getItem(KEY) || "";
+let refreshTimer = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function toast(text) {
+  const node = $("toast");
+  node.textContent = text;
+  node.classList.add("show");
+  setTimeout(() => node.classList.remove("show"), 2600);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch("/admin/api" + path, {
+    ...options,
+    headers: { "Content-Type": "application/json", "X-Admin-Token": token, ...(options.headers || {}) },
+  });
+  if (response.status === 401) { logout("Token inválido."); throw new Error("unauthorized"); }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Error ${response.status}`);
+  }
+  return response.json();
+}
+
+function logout(message) {
+  clearInterval(refreshTimer);
+  token = "";
+  localStorage.removeItem(KEY);
+  $("panel").classList.add("hidden");
+  $("gate").classList.remove("hidden");
+  $("gate-msg").textContent = message || "";
+}
+
+const mmss = (total) =>
+  `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+
+function renderPending(items) {
+  $("pending-count").textContent = items.length ? `(${items.length})` : "";
+  if (!items.length) { $("pending-list").innerHTML = '<p class="empty">Nada pendiente.</p>'; return; }
+  $("pending-list").innerHTML = items.map(item => `
+    <div class="item">
+      <div>
+        <div class="who">${esc(item.name)}</div>
+        <div class="meta">${esc(item.ip)} · ${esc(item.user_agent.slice(0, 70))}</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="b-ok b-sm" data-approve="${esc(item.id)}">Autorizar</button>
+        <button class="b-kill b-sm" data-deny="${esc(item.id)}">Rechazar</button>
+      </div>
+    </div>`).join("");
+}
+
+function renderSessions(items) {
+  $("killall-btn").disabled = !items.length;
+  if (!items.length) { $("sessions-list").innerHTML = '<p class="empty">Nadie conectado.</p>'; return; }
+  $("sessions-list").innerHTML = items.map(item => `
+    <div class="item">
+      <div>
+        <div class="who">${esc(item.name)}</div>
+        <div class="meta">${esc(item.ip)} · ${item.runs_used} análisis usados</div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <span class="left ${item.seconds_left < 120 ? "low" : ""}">${mmss(item.seconds_left)}</span>
+        <button class="b-kill b-sm" data-kill="${esc(item.id)}">Cerrar</button>
+      </div>
+    </div>`).join("");
+}
+
+function renderBudgets(budgets) {
+  const names = {
+    llm_calls: "Llamadas LLM", searches: "Búsquedas",
+    transcriptions: "Transcripciones", audio_seconds: "Segundos audio",
+  };
+  $("budgets").innerHTML = Object.entries(budgets).map(([key, value]) => {
+    const pct = value.limit ? Math.min(100, Math.round((value.used / value.limit) * 100)) : 0;
+    const tone = pct >= 100 ? "max" : pct >= 75 ? "hot" : "";
+    return `<div class="stat">
+      <div class="n">${value.used}${value.limit ? `<span style="font-size:.85rem;color:#9ea3b0">/${value.limit}</span>` : ""}</div>
+      <div class="l">${names[key] || key}</div>
+      ${value.limit ? `<div class="bar"><i class="${tone}" style="width:${pct}%"></i></div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderAudit(entries) {
+  $("audit").innerHTML = entries.map(entry => {
+    const time = new Date(entry.at * 1000).toLocaleTimeString("es-ES");
+    return `<div>${time} · <strong>${esc(entry.action)}</strong> · ${esc(entry.actor)} ${esc(entry.detail)}</div>`;
+  }).join("") || '<span class="empty">Sin actividad.</span>';
+}
+
+async function refresh() {
+  try {
+    const state = await api("/state");
+    $("web-dot").className = "dot " + (state.web_enabled ? "on" : "off");
+    $("web-label").textContent = state.web_enabled ? "Encendida" : "Apagada";
+    const btn = $("web-btn");
+    btn.textContent = state.web_enabled ? "Apagar" : "Encender";
+    btn.className = state.web_enabled ? "b-off" : "b-on";
+    renderPending(state.pending);
+    renderSessions(state.sessions);
+    renderBudgets(state.budgets);
+    renderAudit(state.audit);
+  } catch (error) {
+    if (error.message !== "unauthorized") console.error(error);
+  }
+}
+
+async function enter() {
+  const candidate = $("token-input").value.trim();
+  if (!candidate) return;
+  token = candidate;
+  try {
+    await api("/state");
+    localStorage.setItem(KEY, token);
+    $("gate").classList.add("hidden");
+    $("panel").classList.remove("hidden");
+    $("gate-msg").textContent = "";
+    await refresh();
+    refreshTimer = setInterval(refresh, 5000);
+  } catch {
+    $("gate-msg").textContent = "Token incorrecto.";
+  }
+}
+
+$("token-btn").addEventListener("click", enter);
+$("token-input").addEventListener("keydown", (e) => { if (e.key === "Enter") enter(); });
+$("forget-btn").addEventListener("click", () => logout("Token olvidado en este navegador."));
+
+$("web-btn").addEventListener("click", async () => {
+  const turningOn = $("web-btn").textContent === "Encender";
+  if (!turningOn && !confirm("Apagar la web cerrará también todas las sesiones activas. ¿Seguro?")) return;
+  const result = await api("/web", { method: "POST", body: JSON.stringify({ enabled: turningOn }) });
+  toast(turningOn ? "Web encendida" : `Web apagada · ${result.sessions_killed} sesiones cerradas`);
+  refresh();
+});
+
+$("killall-btn").addEventListener("click", async () => {
+  if (!confirm("¿Cerrar todas las sesiones activas?")) return;
+  const result = await api("/sessions/kill-all", { method: "POST" });
+  toast(`${result.killed} sesiones cerradas`);
+  refresh();
+});
+
+$("panic-btn").addEventListener("click", async () => {
+  if (!confirm("PARADA DE EMERGENCIA: se apaga la web y se expulsa a todo el mundo. ¿Confirmas?")) return;
+  const result = await api("/panic", { method: "POST" });
+  toast(`Parada completada · ${result.sessions_killed} sesiones cerradas`);
+  refresh();
+});
+
+document.addEventListener("click", async (event) => {
+  const { approve, deny, kill } = event.target.dataset || {};
+  try {
+    if (approve) { await api(`/requests/${approve}/decide`, { method: "POST", body: '{"approve":true}' }); toast("Acceso autorizado"); }
+    else if (deny) { await api(`/requests/${deny}/decide`, { method: "POST", body: '{"approve":false}' }); toast("Acceso rechazado"); }
+    else if (kill) { await api(`/sessions/${kill}/kill`, { method: "POST" }); toast("Sesión cerrada"); }
+    else return;
+    refresh();
+  } catch (error) { toast(error.message); }
+});
+
+if (token) { $("token-input").value = token; enter(); }
+</script>
+</body>
+</html>

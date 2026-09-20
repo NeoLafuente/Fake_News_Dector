@@ -1,0 +1,32 @@
+# Runtime dependencies ONLY — this is what goes into the published image.
+# Notebooks, training and evaluation tooling live in requirements.txt and are
+# deliberately absent here: they are what turned the image into a 12 GB build.
+# Nothing below pulls in torch.
+
+# --- Web layer ---
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.34,<1.0
+python-multipart>=0.0.20
+python-dotenv>=1.0
+pydantic>=2.9,<3.0
+
+# --- Access control ---
+itsdangerous>=2.2,<3.0
+
+# --- Agent orchestration ---
+langgraph>=0.3,<2.0
+langchain-core>=0.3,<1.0
+langchain-google-genai>=2.0
+
+# --- Evidence retrieval ---
+requests>=2.32
+ddgs>=9.0
+
+# --- Media ingestion (ffmpeg comes from the base image, not pip) ---
+yt-dlp>=2025.1.1
+
+# --- NLI inference without PyTorch ---
+onnxruntime>=1.20,<2.0
+transformers>=4.45,<6.0
+sentencepiece>=0.2.0
+numpy>=1.26,<3.0

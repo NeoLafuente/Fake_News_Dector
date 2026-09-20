@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FactX Agent · Acceso</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0d0e15;--panel:rgba(20,22,30,.72);--border:rgba(255,255,255,.09);
+      --text:#fff;--muted:#9ea3b0;--primary:#6366f1;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);
+     min-height:100vh;display:grid;place-items:center;padding:20px;overflow-x:hidden}
+.orb{position:fixed;border-radius:50%;filter:blur(110px);opacity:.28;pointer-events:none}
+.orb-a{width:420px;height:420px;background:#6366f1;top:-140px;left:-120px}
+.orb-b{width:380px;height:380px;background:#2dd4bf;bottom:-150px;right:-110px}
+.card{position:relative;width:100%;max-width:440px;background:var(--panel);
+      border:1px solid var(--border);border-radius:20px;padding:38px 34px;
+      backdrop-filter:blur(18px);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+h1{font-size:1.85rem;font-weight:800;letter-spacing:-.5px;margin-bottom:6px}
+h1 span{background:linear-gradient(90deg,#6366f1,#2dd4bf);-webkit-background-clip:text;
+        background-clip:text;-webkit-text-fill-color:transparent}
+.sub{color:var(--muted);font-size:.92rem;margin-bottom:26px;line-height:1.5}
+label{display:block;font-size:.8rem;color:var(--muted);margin:0 0 7px;font-weight:600;
+      text-transform:uppercase;letter-spacing:.6px}
+input{width:100%;padding:13px 15px;background:rgba(0,0,0,.34);color:var(--text);
+      border:1px solid var(--border);border-radius:11px;font-size:.98rem;font-family:inherit;
+      margin-bottom:17px;transition:border-color .2s}
+input:focus{outline:none;border-color:var(--primary)}
+button{width:100%;padding:14px;border:0;border-radius:11px;font-family:inherit;
+       font-size:1rem;font-weight:700;cursor:pointer;background:var(--primary);color:#fff;
+       transition:transform .15s,opacity .2s}
+button:hover:not(:disabled){transform:translateY(-1px)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.ghost{background:transparent;border:1px solid var(--border);color:var(--muted);margin-top:11px}
+.msg{margin-top:15px;padding:12px 14px;border-radius:11px;font-size:.88rem;line-height:1.5;display:none}
+.msg.show{display:block}
+.msg.err{background:rgba(239,68,68,.13);border:1px solid var(--bad);color:#fca5a5}
+.msg.ok{background:rgba(34,197,94,.13);border:1px solid var(--ok);color:#86efac}
+.msg.warn{background:rgba(245,158,11,.13);border:1px solid var(--warn);color:#fcd34d}
+.center{text-align:center}
+.spinner{width:42px;height:42px;margin:0 auto 20px;border:3px solid rgba(255,255,255,.12);
+         border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.pulse{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);
+       margin-right:8px;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.timer{font-variant-numeric:tabular-nums;font-size:2.1rem;font-weight:800;margin:14px 0 6px}
+.hint{color:var(--muted);font-size:.82rem;line-height:1.55;margin-top:18px}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="orb orb-a"></div><div class="orb orb-b"></div>
+
+<div class="card">
+  <!-- Estado: comprobando -->
+  <section id="view-loading" class="center">
+    <div class="spinner"></div>
+    <p class="sub" style="margin:0">Comprobando el estado del servicio…</p>
+  </section>
+
+  <!-- Estado: web apagada -->
+  <section id="view-offline" class="center hidden">
+    <div style="font-size:52px;margin-bottom:14px">🌙</div>
+    <h1>Servicio <span>apagado</span></h1>
+    <p class="sub">La aplicación está desactivada por el administrador en este momento.
+       Vuelve cuando te avise de que está encendida.</p>
+    <button class="ghost" onclick="location.reload()">Volver a comprobar</button>
+  </section>
+
+  <!-- Estado: formulario -->
+  <section id="view-form" class="hidden">
+    <h1>Fact<span>X</span> Agent</h1>
+    <p class="sub">Acceso restringido. Introduce la credencial y espera a que el
+       administrador autorice tu sesión.</p>
+    <form id="gate-form">
+      <label for="name">Tu nombre</label>
+      <input id="name" type="text" maxlength="60" placeholder="Para que sepa quién eres" required autocomplete="name">
+      <label for="password">Credencial de acceso</label>
+      <input id="password" type="password" maxlength="200" placeholder="••••••••••" required autocomplete="off">
+      <button type="submit" id="submit-btn">Solicitar acceso</button>
+    </form>
+    <div id="form-msg" class="msg"></div>
+  </section>
+
+  <!-- Estado: esperando aprobación -->
+  <section id="view-waiting" class="center hidden">
+    <div class="spinner"></div>
+    <h1 style="font-size:1.35rem"><span class="pulse"></span>Esperando autorización</h1>
+    <p class="sub" style="margin-top:10px">Se ha enviado un aviso al administrador.
+       En cuanto acepte, entrarás automáticamente.</p>
+    <div class="timer" id="countdown">--:--</div>
+    <p class="hint" style="margin-top:0">Tiempo restante para que responda</p>
+    <div id="wait-msg" class="msg"></div>
+    <button class="ghost" id="cancel-btn">Cancelar</button>
+  </section>
+</div>
+
+<script>
+const views = ["loading", "offline", "form", "waiting"];
+const show = (name) => views.forEach(v =>
+  document.getElementById("view-" + v).classList.toggle("hidden", v !== name));
+
+const setMsg = (el, text, kind) => {
+  const node = document.getElementById(el);
+  node.textContent = text;
+  node.className = "msg show " + kind;
+};
+const clearMsg = (el) => { document.getElementById(el).className = "msg"; };
+
+let pollTimer = null, tickTimer = null, deadline = 0;
+
+async function boot() {
+  try {
+    const state = await (await fetch("/auth/state", { credentials: "same-origin" })).json();
+    if (state.has_session) { location.href = "/"; return; }
+    show(state.web_enabled ? "form" : "offline");
+  } catch {
+    show("offline");
+  }
+}
+
+document.getElementById("gate-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  clearMsg("form-msg");
+  const btn = document.getElementById("submit-btn");
+  btn.disabled = true;
+  btn.textContent = "Enviando…";
+
+  try {
+    const response = await fetch("/auth/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        name: document.getElementById("name").value.trim(),
+        password: document.getElementById("password").value,
+      }),
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      setMsg("form-msg", data.detail || "No se pudo enviar la solicitud.", "err");
+      return;
+    }
+    if (data.notified && !data.notified.email && !data.notified.telegram) {
+      setMsg("wait-msg", "Aviso: no se pudo notificar automáticamente. "
+        + "Contacta con el administrador para que te apruebe desde el panel.", "warn");
+    }
+    startWaiting(data.request_id, data.expires_in);
+  } catch {
+    setMsg("form-msg", "Error de red. Revisa tu conexión.", "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Solicitar acceso";
+  }
+});
+
+function startWaiting(requestId, expiresIn) {
+  show("waiting");
+  deadline = Date.now() + expiresIn * 1000;
+
+  tickTimer = setInterval(() => {
+    const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    const mm = String(Math.floor(left / 60)).padStart(2, "0");
+    const ss = String(left % 60).padStart(2, "0");
+    document.getElementById("countdown").textContent = `${mm}:${ss}`;
+    if (left === 0) stopWaiting("La solicitud ha caducado. Inténtalo de nuevo.", "warn");
+  }, 1000);
+
+  pollTimer = setInterval(async () => {
+    try {
+      const response = await fetch(`/auth/status?request_id=${encodeURIComponent(requestId)}`,
+        { credentials: "same-origin" });
+      const data = await response.json();
+      if (data.status === "approved") { clearTimers(); location.href = "/"; }
+      else if (data.status === "denied") stopWaiting("El administrador ha rechazado el acceso.", "err");
+      else if (data.status === "expired" || data.status === "unknown")
+        stopWaiting("La solicitud ya no es válida. Inténtalo de nuevo.", "warn");
+    } catch { /* transient network error: keep polling */ }
+  }, 3000);
+}
+
+function clearTimers() { clearInterval(pollTimer); clearInterval(tickTimer); }
+
+function stopWaiting(message, kind) {
+  clearTimers();
+  show("form");
+  setMsg("form-msg", message, kind);
+}
+
+document.getElementById("cancel-btn").addEventListener("click", () => {
+  clearTimers();
+  show("form");
+  clearMsg("form-msg");
+});
+
+boot();
+</script>
+</body>
+</html>
