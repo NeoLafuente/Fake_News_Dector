@@ -77,12 +77,15 @@ def get_graph():
 
 
 def consume_run(request: Request) -> str:
-    """Charge one analysis against the caller's session quota."""
+    """Charge one analysis against the caller's session quota.
+
+    The reservation is conditional, so a refused request does not consume a
+    slot and two concurrent requests cannot share the last one.
+    """
     sid = middleware.current_session_id(request)
     if sid is None:
         raise HTTPException(status_code=401, detail="Sesión no válida.")
-    used = store.bump_session_runs(sid)
-    if used > settings.max_runs_per_session:
+    if not store.try_consume_run(sid, settings.max_runs_per_session):
         raise HTTPException(
             status_code=429,
             detail=f"Has agotado los {settings.max_runs_per_session} análisis de esta sesión.",

@@ -66,9 +66,13 @@ Garantías:
 
 - La web **arranca apagada** tras cada reinicio (`WEB_ENABLED_ON_BOOT=false`).
 - Los enlaces de aprobación son HMAC firmados, caducan y son de un solo uso.
+  Abrirlos no decide nada: la autorización es un POST confirmado, para que un
+  escáner de correo o una previsualización de Telegram no pueda aprobar por ti.
 - La revocación es inmediata: la cookie solo lleva un identificador y la validez
   se comprueba en base de datos en cada petición.
 - `/docs`, `/openapi.json` y todos los endpoints quedan detrás de la puerta.
+- Las reservas de cuota son atómicas y las cabeceras de proxy solo se creen si
+  `TRUST_PROXY_HEADERS` lo autoriza.
 
 ---
 

@@ -16,6 +16,9 @@ services:
     env_file: .env
     environment:
       PORT: 8000
+      # This stack only ever receives traffic through cloudflared, which
+      # overwrites CF-Connecting-IP, so the header is the real client address.
+      TRUST_PROXY_HEADERS: "true"
     volumes:
       # Sessions, kill-switch state and daily counters survive restarts here.
       - ./data:/data

@@ -155,8 +155,14 @@ curl -s http://localhost:8000/health   # solo desde la máquina anfitriona
 
 1. El usuario mete su nombre y la credencial
 2. Te llega un aviso por email y Telegram
-3. Pulsas **Autorizar** → entra con una sesión de 10 minutos
-4. Lo ves en el panel con su cuenta atrás y sus análisis consumidos
+3. Pulsas **Autorizar** → se abre una página de confirmación → pulsas el botón
+4. Entra con una sesión de 10 minutos, visible en el panel con su cuenta atrás
+
+> Ese segundo clic no es burocracia: los escáneres antivirus del correo y las
+> previsualizaciones de enlaces de Telegram **abren los enlaces por su cuenta**.
+> Si la decisión ocurriera al abrir el enlace, un escáner podría autorizar a
+> alguien sin que tú hicieras nada. Abrir el enlace no cambia nada; solo el
+> botón decide.
 
 ### Al terminar
 
@@ -190,7 +196,7 @@ contenedor no regala cuota nueva**.
 | `DAILY_LLM_CALL_BUDGET` | 80 | Llamadas al LLM al día |
 | `DAILY_SEARCH_BUDGET` | 150 | Búsquedas al día |
 | `DAILY_TRANSCRIPTION_BUDGET` | 60 | Transcripciones al día |
-| `MAX_AUDIO_SECONDS` | 180 | Duración de audio aceptada |
+| `MAX_AUDIO_SECONDS` | 180 | Duración de audio aceptada (si no se puede medir, se rechaza) |
 | `MAX_UPLOAD_MB` | 20 | Tamaño de subida |
 
 El consumo del día se ve en vivo en `/admin`.
@@ -219,6 +225,8 @@ El consumo del día se ve en vivo en `/admin`.
 | Los enlaces del email apuntan a localhost | `PUBLIC_BASE_URL` sin actualizar | Pon la URL pública real |
 | `no such file /models/nli-onnx/model.onnx` | Imagen construida a medias | Reconstruye sin caché: `docker build --no-cache .` |
 | El túnel no conecta con la app | Service mal puesto | Debe ser `http://app:8000`, no `localhost` |
+| El límite de intentos se agota con un solo usuario | `TRUST_PROXY_HEADERS=false` tras el túnel | Ponlo en `true`: si no, todas las visitas llegan con la IP de `cloudflared` y comparten cupo. `docker-compose.yml` ya lo hace por ti |
+| "No se puede determinar la duración de ese medio" | Retransmisión en directo o metadatos ocultos | Es intencionado: sin duración conocida no hay tope de gasto. Sube el archivo |
 
 ---
 
@@ -234,6 +242,24 @@ El consumo del día se ve en vivo en `/admin`.
   la API sin sesión.
 - El contenedor corre como usuario sin privilegios (uid 10001) y `/data` es lo
   único que necesita escribir.
-- `AUTH_REQUESTS_PER_HOUR` limita por IP para que nadie te inunde el correo.
+- `AUTH_REQUESTS_PER_HOUR` limita por IP para que nadie te inunde el correo. Las
+  cabeceras `CF-Connecting-IP` y `X-Forwarded-For` solo se creen si
+  `TRUST_PROXY_HEADERS=true`; expuesto directamente serían falsificables.
+  Esa variable gobierna **las dos capas a la vez**: la comprobación de la
+  aplicación y los flags `--proxy-headers` de Uvicorn. Tiene que ser así: Uvicorn
+  reescribe `request.client.host` antes de que corra ningún código propio, así
+  que activarlo ahí de forma fija dejaría la variable en pura decoración.
+  `FORWARDED_ALLOW_IPS` permite además acotar qué peers pueden reenviar.
+- El tope de subida se aplica contando bytes en la capa ASGI, no solo mirando
+  `Content-Length`: una petición chunked o con la cabecera falseada también se
+  corta a mitad de transferencia.
+- Una duración que no sea un número finito y positivo (NaN, infinito, nula)
+  cuenta como desconocida y se rechaza. NaN es "verdadero" en Python y falla
+  toda comparación, así que sin esto se colaría entera.
+- Autorizar es un POST confirmado, no un GET: abrir el enlace no decide nada, así
+  que un escáner de correo no puede aprobar a nadie por ti.
+- Los topes diarios se reservan con una operación atómica, de modo que dos
+  peticiones simultáneas no pueden gastar la misma ranura.
+- Un nombre con saltos de línea no puede inyectar cabeceras en el email.
 - El `.env` está en `.gitignore` y en `.dockerignore`: no entra ni en el repo ni
   en ninguna capa de la imagen.

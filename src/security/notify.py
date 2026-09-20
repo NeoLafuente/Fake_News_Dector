@@ -4,6 +4,7 @@ A channel that fails must never block the request; the pending approval is
 always visible in the admin panel as a fallback.
 """
 import html
+import re
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -13,6 +14,16 @@ import requests
 
 from .config import settings
 from .tokens import make_decision_token
+
+
+# Anything a visitor controls must be stripped of newlines before it can reach
+# a mail header: a raw CR/LF there is header injection, and it also makes
+# EmailMessage raise, which would turn a best-effort notification into a 500.
+_CONTROL = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+
+
+def header_safe(value: str, limit: int = 120) -> str:
+    return _CONTROL.sub(" ", value or "").strip()[:limit]
 
 
 def _links(request_id: str) -> Dict[str, str]:
@@ -28,13 +39,13 @@ def _send_email(subject: str, text_body: str, html_body: str) -> bool:
     if not (settings.smtp_user and settings.smtp_password):
         print("[notify] SMTP no configurado; se omite el email.")
         return False
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = settings.smtp_user
-    msg["To"] = settings.owner_email
-    msg.set_content(text_body)
-    msg.add_alternative(html_body, subtype="html")
     try:
+        msg = EmailMessage()
+        msg["Subject"] = header_safe(subject, 200)
+        msg["From"] = settings.smtp_user
+        msg["To"] = settings.owner_email
+        msg.set_content(text_body)
+        msg.add_alternative(html_body, subtype="html")
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
             server.starttls(context=ssl.create_default_context())
             server.login(settings.smtp_user, settings.smtp_password)
@@ -70,13 +81,16 @@ def notify_access_request(request_id: str, name: str, ip: str, user_agent: str) 
     """Ask the owner to approve or reject a visitor. Returns per-channel status."""
     links = _links(request_id)
     minutes = settings.session_minutes
+    name = header_safe(name, 80) or "Invitado"
+    ip = header_safe(ip, 45)
+    user_agent = header_safe(user_agent, 120)
     safe_name = html.escape(name)
-    safe_ua = html.escape(user_agent[:120])
+    safe_ua = html.escape(user_agent)
 
     subject = f"[FactX] {name} pide acceso ({minutes} min)"
     text_body = (
         f"{name} quiere entrar en FactX Agent.\n\n"
-        f"IP: {ip}\nNavegador: {user_agent[:120]}\n\n"
+        f"IP: {ip}\nNavegador: {user_agent}\n\n"
         f"AUTORIZAR {minutes} min: {links['approve']}\n"
         f"RECHAZAR:            {links['deny']}\n\n"
         f"Panel de control: {links['admin']}\n"

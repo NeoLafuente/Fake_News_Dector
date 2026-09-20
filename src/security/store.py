@@ -269,13 +269,22 @@ def pending_requests() -> List[Dict[str, Any]]:
     ]
 
 
-def bump_session_runs(sid: str) -> int:
+def try_consume_run(sid: str, limit: int) -> bool:
+    """Reserve one analysis for a session, atomically.
+
+    The increment only happens when the session is still under its limit, so a
+    rejected request never burns quota and two concurrent requests cannot both
+    slip past the last remaining slot.
+    """
     conn = connect()
     with _lock:
-        conn.execute("UPDATE sessions SET runs_used = runs_used + 1 WHERE id=?", (sid,))
+        cur = conn.execute(
+            "UPDATE sessions SET runs_used = runs_used + 1 "
+            "WHERE id=? AND revoked=0 AND expires_at > ? AND runs_used < ?",
+            (sid, now(), limit),
+        )
         conn.commit()
-    row = get_session(sid)
-    return int(row["runs_used"]) if row else 0
+    return cur.rowcount > 0
 
 
 # --- Daily counters --------------------------------------------------------
@@ -285,6 +294,27 @@ def counter_value(key: str) -> int:
         "SELECT value FROM counters WHERE day=? AND key=?", (_today(), key)
     ).fetchone()
     return int(row["value"]) if row else 0
+
+
+def counter_try_claim(key: str, amount: int, limit: int) -> bool:
+    """Increment a daily counter only if it stays within `limit`.
+
+    Check and increment happen under one lock and one conditional statement, so
+    concurrent threads cannot both observe the same remaining headroom and each
+    spend it.
+    """
+    if amount > limit:
+        return False
+    conn = connect()
+    with _lock:
+        cur = conn.execute(
+            "INSERT INTO counters(day,key,value) VALUES(?,?,?) "
+            "ON CONFLICT(day,key) DO UPDATE SET value = value + excluded.value "
+            "WHERE counters.value + excluded.value <= ?",
+            (_today(), key, amount, limit),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def counter_add(key: str, amount: int = 1) -> int:

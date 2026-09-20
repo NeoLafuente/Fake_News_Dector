@@ -74,4 +74,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # Single worker on purpose: the SQLite state store and the kill switch assume
 # one process, and this workload is I/O bound on external APIs anyway.
-CMD ["sh", "-c", "exec uvicorn src.app:app --host 0.0.0.0 --port ${PORT} --workers 1 --proxy-headers --forwarded-allow-ips='*'"]
+# Uvicorn's proxy-header handling rewrites request.client.host from
+# X-Forwarded-For before any application code runs, so enabling it
+# unconditionally would make the application-level TRUST_PROXY_HEADERS switch
+# cosmetic: a directly reachable origin could still be spoofed. Both layers are
+# therefore driven by the same variable, and both default to off.
+CMD ["sh", "-c", "\
+if [ \"$TRUST_PROXY_HEADERS\" = \"true\" ]; then \
+  set -- --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-*}\"; \
+else \
+  set -- ; \
+fi; \
+exec uvicorn src.app:app --host 0.0.0.0 --port ${PORT} --workers 1 \"$@\"" ]

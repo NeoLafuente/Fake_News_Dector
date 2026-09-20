@@ -32,15 +32,17 @@ def remaining(key: str) -> int:
 
 
 def claim(key: str, amount: int = 1) -> None:
-    """Reserve `amount` units of a daily budget or raise BudgetExceeded."""
+    """Reserve `amount` units of a daily budget or raise BudgetExceeded.
+
+    The reservation is atomic: concurrent callers cannot both be granted the
+    last remaining slot, which is what makes the ceiling a real one.
+    """
     limit = _LIMITS[key]()
-    used = store.counter_value(key)
-    if used + amount > limit:
+    if not store.counter_try_claim(key, amount, limit):
         raise BudgetExceeded(
-            f"Límite diario alcanzado para '{key}' ({used}/{limit}). "
+            f"Límite diario alcanzado para '{key}' ({store.counter_value(key)}/{limit}). "
             "Vuelve a intentarlo mañana o sube el límite en el .env."
         )
-    store.counter_add(key, amount)
 
 
 def record(key: str, amount: int = 1) -> None:
