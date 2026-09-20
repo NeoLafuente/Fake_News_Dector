@@ -10,6 +10,10 @@ services:
       context: .
       dockerfile: Dockerfile
     image: factx:local
+    environment:
+      # Port published straight to the host: nothing rewrites forwarding
+      # headers here, so they must not be trusted.
+      TRUST_PROXY_HEADERS: "false"
     ports:
       - "8000:8000"
 

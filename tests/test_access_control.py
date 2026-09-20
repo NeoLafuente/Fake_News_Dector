@@ -44,10 +44,17 @@ def client():
         yield test_client
 
 
+def decide(client, request_id, action):
+    """Follow an approval link the way the owner does: preview, then confirm."""
+    token = make_decision_token(request_id, action)
+    client.get(f"/auth/decide?token={token}")
+    return client.post("/auth/decide", data={"token": token, "action": action})
+
+
 def approve(client, name="Invitado", password="clave-de-prueba"):
     """Walk a visitor all the way to an authorised session."""
     request_id = client.post("/auth/request", json={"password": password, "name": name}).json()["request_id"]
-    client.get(f"/auth/decide?token={make_decision_token(request_id, 'approve')}")
+    decide(client, request_id, "approve")
     client.get(f"/auth/status?request_id={request_id}")
     return request_id
 
@@ -124,6 +131,9 @@ def test_tampered_approval_link_is_rejected(client):
     ).json()["request_id"]
     forged = make_decision_token(request_id, "approve")[:-4] + "xxxx"
     assert "Enlace caducado" in client.get(f"/auth/decide?token={forged}").text
+    assert "Enlace caducado" in client.post(
+        "/auth/decide", data={"token": forged, "action": "approve"}
+    ).text
 
 
 def test_approval_link_works_exactly_once(client):
@@ -132,8 +142,10 @@ def test_approval_link_works_exactly_once(client):
         "/auth/request", json={"password": "clave-de-prueba", "name": "Eva"}
     ).json()["request_id"]
     token = make_decision_token(request_id, "approve")
-    assert "Acceso autorizado" in client.get(f"/auth/decide?token={token}").text
-    assert "Ya decidido" in client.get(f"/auth/decide?token={token}").text
+    first = client.post("/auth/decide", data={"token": token, "action": "approve"})
+    assert "Acceso autorizado" in first.text
+    second = client.post("/auth/decide", data={"token": token, "action": "approve"})
+    assert "Ya decidido" in second.text
 
 
 def test_denied_request_grants_nothing(client):
@@ -141,7 +153,7 @@ def test_denied_request_grants_nothing(client):
     request_id = client.post(
         "/auth/request", json={"password": "clave-de-prueba", "name": "Eva"}
     ).json()["request_id"]
-    client.get(f"/auth/decide?token={make_decision_token(request_id, 'deny')}")
+    decide(client, request_id, "deny")
     assert client.get(f"/auth/status?request_id={request_id}").json()["status"] == "denied"
     assert client.post("/analyze_text", json={"transcript": "x"}).status_code == 401
 
@@ -229,3 +241,164 @@ def test_upload_filenames_cannot_escape_the_download_directory(hostile):
 
     result = safe_filename(hostile)
     assert "/" not in result and "\\" not in result and ".." not in result
+
+
+# --- Approval links are safe to prefetch -----------------------------------
+
+def test_get_on_a_decision_link_does_not_decide(client):
+    """Mail scanners and link previews follow links; that must change nothing."""
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    request_id = client.post(
+        "/auth/request", json={"password": "clave-de-prueba", "name": "Eva"}
+    ).json()["request_id"]
+    token = make_decision_token(request_id, "approve")
+
+    preview = client.get(f"/auth/decide?token={token}")
+    assert preview.status_code == 200
+    assert "Confirma la decisión" in preview.text
+    assert client.get(f"/auth/status?request_id={request_id}").json()["status"] == "pending"
+
+    client.post("/auth/decide", data={"token": token, "action": "approve"})
+    assert client.get(f"/auth/status?request_id={request_id}").json()["status"] == "approved"
+
+
+def test_submitted_action_cannot_override_the_signed_one(client):
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    request_id = client.post(
+        "/auth/request", json={"password": "clave-de-prueba", "name": "Eva"}
+    ).json()["request_id"]
+    deny_token = make_decision_token(request_id, "deny")
+    response = client.post("/auth/decide", data={"token": deny_token, "action": "approve"})
+    assert "Petición inconsistente" in response.text
+    assert client.get(f"/auth/status?request_id={request_id}").json()["status"] == "pending"
+
+
+# --- Quota accounting ------------------------------------------------------
+
+def test_a_refused_run_does_not_burn_quota(client):
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    approve(client, "Eva")
+    session_id = store.live_sessions()[0]["id"]
+
+    for _ in range(2):
+        client.post("/analyze_text", json={"transcript": "t"})
+    for _ in range(3):
+        assert client.post("/analyze_text", json={"transcript": "t"}).status_code == 429
+
+    # Rejections must not keep incrementing the stored counter past the limit.
+    assert store.get_session(session_id)["runs_used"] == 2
+
+
+def test_budget_claim_is_all_or_nothing(client):
+    from src.security.config import settings
+
+    limit = settings.daily_llm_call_budget
+    budget.claim(budget.LLM_CALLS, limit - 1)
+    # A claim that does not fit must leave the counter untouched.
+    with pytest.raises(budget.BudgetExceeded):
+        budget.claim(budget.LLM_CALLS, 5)
+    assert store.counter_value(budget.LLM_CALLS) == limit - 1
+    budget.claim(budget.LLM_CALLS, 1)
+    assert store.counter_value(budget.LLM_CALLS) == limit
+
+
+def test_concurrent_claims_cannot_oversubscribe(client):
+    import threading
+
+    from src.security.config import settings
+
+    granted = []
+
+    def worker():
+        try:
+            budget.claim(budget.SEARCHES)
+            granted.append(1)
+        except budget.BudgetExceeded:
+            pass
+
+    limit = settings.daily_search_budget
+    threads = [threading.Thread(target=worker) for _ in range(limit + 20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(granted) == limit
+    assert store.counter_value(budget.SEARCHES) == limit
+
+
+# --- Notification hardening ------------------------------------------------
+
+@pytest.mark.parametrize("hostile", [
+    "Eva\r\nBcc: victima@example.com",
+    "Eva\nSubject: otra cosa",
+    "Eva\x00nulo",
+])
+def test_crlf_in_a_name_cannot_reach_a_mail_header(client, hostile):
+    from src.security.notify import header_safe
+
+    cleaned = header_safe(hostile)
+    assert "\r" not in cleaned and "\n" not in cleaned and "\x00" not in cleaned
+
+    # And the request itself must still succeed rather than 500.
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    response = client.post("/auth/request", json={"password": "clave-de-prueba", "name": hostile})
+    assert response.status_code == 200
+
+
+# --- Forwarding headers ----------------------------------------------------
+
+def test_forwarding_headers_are_ignored_unless_trusted(client):
+    from src.security.config import settings
+
+    assert settings.trust_proxy_headers is False, "el default debe ser no fiarse"
+
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    # Rotating the header must not hand out a fresh rate-limit bucket.
+    codes = [
+        client.post(
+            "/auth/request",
+            json={"password": "mala", "name": "bot"},
+            headers={"X-Forwarded-For": f"10.0.0.{i}"},
+        ).status_code
+        for i in range(settings.auth_requests_per_hour + 5)
+    ]
+    assert 429 in codes
+
+
+# --- Request size ----------------------------------------------------------
+
+def test_oversized_body_is_refused_before_it_is_buffered(client):
+    from src.security.config import settings
+
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    approve(client, "Eva")
+    oversized = str(settings.max_upload_mb * 1024 * 1024 + 10 * 1024 * 1024)
+    response = client.post(
+        "/transcribe_only",
+        content=b"x",
+        headers={"Content-Length": oversized, "Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 413
+
+
+# --- Audio duration --------------------------------------------------------
+
+def test_unreadable_duration_is_refused(monkeypatch):
+    """An unmeasurable file must not reach the paid transcription API."""
+    from src.data_ingestion_transcription import transcriber
+
+    monkeypatch.setattr(transcriber, "probe_duration", lambda path: 0.0)
+    engine = transcriber.RemoteTranscriber(api_key="fake", base_url="http://unused")
+    with pytest.raises(transcriber.TranscriptionError, match="duración"):
+        engine.transcribe("/tmp/whatever.mp3")
+
+
+def test_media_without_a_known_duration_is_refused(monkeypatch):
+    from src.data_ingestion_transcription.audio_extractor import AudioExtractor
+    from src.data_ingestion_transcription.transcriber import TranscriptionError
+
+    extractor = AudioExtractor.__new__(AudioExtractor)
+    monkeypatch.setattr(extractor, "_probe", lambda url: {"title": "directo"}, raising=False)
+    with pytest.raises(TranscriptionError, match="duración"):
+        extractor.download_and_extract_audio("https://example.com/live")

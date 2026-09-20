@@ -19,11 +19,18 @@ PUBLIC_PREFIXES = ("/static/", "/auth/")
 
 
 def client_ip(request: Request) -> str:
-    """Real client IP behind Cloudflare Tunnel, falling back to the socket."""
-    for header in ("cf-connecting-ip", "x-forwarded-for"):
-        value = request.headers.get(header)
-        if value:
-            return value.split(",")[0].strip()
+    """The IP the rate limiter keys on.
+
+    Forwarding headers are only honoured when TRUST_PROXY_HEADERS says the
+    origin sits behind a proxy that sets them. Trusting them unconditionally
+    would let anyone who can reach the origin rotate the header and walk
+    straight past AUTH_REQUESTS_PER_HOUR.
+    """
+    if settings.trust_proxy_headers:
+        for header in ("cf-connecting-ip", "x-forwarded-for"):
+            value = request.headers.get(header)
+            if value:
+                return value.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -43,9 +50,24 @@ def _is_public(path: str) -> bool:
 
 
 def install(app) -> None:
+    # Multipart bodies are buffered by Starlette before any handler runs, so an
+    # oversized upload has to be refused from the declared length first; the
+    # streaming check in save_upload still covers clients that lie or chunk.
+    max_body_bytes = settings.max_upload_mb * 1024 * 1024 + 1024 * 1024
+
     @app.middleware("http")
     async def access_gate(request: Request, call_next):
         path = request.url.path
+
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > max_body_bytes:
+            return JSONResponse(
+                {
+                    "detail": f"El archivo supera el máximo de {settings.max_upload_mb} MB.",
+                    "code": "payload_too_large",
+                },
+                status_code=413,
+            )
 
         # The admin surface stays reachable even when the site is switched off,
         # otherwise the owner could never switch it back on.

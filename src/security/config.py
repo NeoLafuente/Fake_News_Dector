@@ -38,6 +38,10 @@ class Settings:
     auth_requests_per_hour: int = field(default_factory=lambda: _i("AUTH_REQUESTS_PER_HOUR", 5))
     public_base_url: str = field(default_factory=lambda: _s("PUBLIC_BASE_URL", "http://localhost:8000"))
     cookie_secure: bool = field(default_factory=lambda: _b("COOKIE_SECURE", "true"))
+    # Forwarding headers are forgeable by anyone who can reach the origin
+    # directly, so they are ignored unless the deployment really is behind a
+    # proxy that overwrites them (the Cloudflare tunnel does).
+    trust_proxy_headers: bool = field(default_factory=lambda: _b("TRUST_PROXY_HEADERS", "false"))
     db_path: str = field(default_factory=lambda: _s("SECURITY_DB_PATH", "/data/security.db"))
 
     # --- Notification channels ---------------------------------------------

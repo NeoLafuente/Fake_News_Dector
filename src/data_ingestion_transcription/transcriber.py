@@ -93,7 +93,15 @@ class RemoteTranscriber:
             )
 
         duration = probe_duration(audio_path)
-        if duration and duration > settings.max_audio_seconds:
+        # probe_duration returns 0.0 when ffprobe cannot read the file. Letting
+        # that through would mean MAX_AUDIO_SECONDS is not a bound at all, so an
+        # unmeasurable file is refused rather than sent to the paid API.
+        if not duration:
+            raise TranscriptionError(
+                "No se puede leer la duración de ese audio, así que se rechaza por "
+                "precaución. Prueba con un formato estándar (mp3, wav, m4a, mp4)."
+            )
+        if duration > settings.max_audio_seconds:
             raise TranscriptionError(
                 f"El audio dura {int(duration)}s y el máximo permitido son "
                 f"{settings.max_audio_seconds}s. Recorta el fragmento."

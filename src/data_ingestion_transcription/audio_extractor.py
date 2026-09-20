@@ -53,8 +53,17 @@ class AudioExtractor:
         os.makedirs(output_path, exist_ok=True)
 
         info = self._probe(url)
-        duration = info.get("duration") or 0
-        if duration and duration > settings.max_audio_seconds:
+        duration = info.get("duration")
+        # Fail closed. Treating an unknown duration as acceptable would let a
+        # live stream or a site that hides its metadata walk straight past the
+        # limit and start an unbounded download.
+        if not duration:
+            raise TranscriptionError(
+                "No se puede determinar la duración de ese medio (¿es una retransmisión "
+                "en directo?), así que se rechaza por precaución. Sube el archivo o usa "
+                "un enlace a un vídeo con duración conocida."
+            )
+        if duration > settings.max_audio_seconds:
             raise TranscriptionError(
                 f"El vídeo dura {int(duration)}s y el máximo permitido son "
                 f"{settings.max_audio_seconds}s."
