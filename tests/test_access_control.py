@@ -525,3 +525,50 @@ def test_uvicorn_proxy_trust_is_not_hardcoded():
     cmd = cmd[cmd.rindex("CMD "):]
     assert "--proxy-headers" in cmd
     assert "TRUST_PROXY_HEADERS" in cmd, "los flags de proxy deben depender de la variable"
+
+
+# --- Nothing the gate serves may be cached ---------------------------------
+
+@pytest.mark.parametrize("path", [
+    "/",
+    "/auth/state",
+    "/auth/status?request_id=nonexistent",
+    "/health",
+])
+def test_gate_responses_forbid_caching(client, path):
+    """A cached response here strands the visitor.
+
+    /auth/status is polled at an identical URL every few seconds, and / returns
+    either the gate or the app depending on the session. If a browser or CDN
+    replays either one, the visitor waits forever on a session that is already
+    live on the server.
+    """
+    response = client.get(path)
+    assert "no-store" in response.headers.get("cache-control", "")
+
+
+def test_static_assets_are_also_no_store(client):
+    response = client.get("/static/app.js")
+    assert "no-store" in response.headers.get("cache-control", "")
+
+
+def test_admin_api_forbids_caching(client):
+    response = client.get("/admin/api/state", headers=ADMIN)
+    assert "no-store" in response.headers.get("cache-control", "")
+
+
+def test_polling_sees_the_approval_made_from_the_admin_panel(client):
+    """The exact flow that was reported broken: approve from the panel, and the
+    visitor's next poll must hand over the session cookie."""
+    client.post("/admin/api/web", headers=ADMIN, json={"enabled": True})
+    request_id = client.post(
+        "/auth/request", json={"password": "clave-de-prueba", "name": "Eva"}
+    ).json()["request_id"]
+
+    assert client.get(f"/auth/status?request_id={request_id}").json()["status"] == "pending"
+    client.post(f"/admin/api/requests/{request_id}/decide", headers=ADMIN, json={"approve": True})
+
+    body = client.get(f"/auth/status?request_id={request_id}").json()
+    assert body["status"] == "approved"
+    assert "factx_session" in client.cookies
+    assert b"Solicitar acceso" not in client.get("/").content

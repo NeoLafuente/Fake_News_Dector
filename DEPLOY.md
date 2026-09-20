@@ -116,9 +116,21 @@ Un *named tunnel* da una URL **estática** que sobrevive a reinicios.
    - Service: **HTTP** → `app:8000`  ← el nombre del servicio en compose, no `localhost`
 4. Pon esa URL en `PUBLIC_BASE_URL` del `.env` (se usa en los enlaces del email)
 
-> Sin dominio propio, `cloudflared tunnel --url http://localhost:8000` da una URL
-> aleatoria de `trycloudflare.com` que cambia en cada arranque. Sirve para
-> probar, pero entonces hay que actualizar `PUBLIC_BASE_URL` cada vez.
+> Sin dominio propio, un *quick tunnel* da una URL aleatoria de
+> `trycloudflare.com` que cambia en cada arranque. Sirve para probar, pero hay
+> que actualizar `PUBLIC_BASE_URL` cada vez. Lánzalo contra la red de Compose,
+> no contra el contenedor, para que sobreviva a los reinicios de la app:
+>
+> ```bash
+> docker compose up -d app                 # primero la app
+> docker network ls                        # localiza la red <proyecto>_default
+> docker run --rm -it --network <proyecto>_default \
+>   cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://app:8000
+> ```
+>
+> Atarlo con `--network container:factx-app` parece más cómodo, pero entonces
+> recrear la app mata el túnel y te obliga a una URL nueva, que a su vez obliga
+> a recrear la app: un bucle sin salida.
 
 ---
 
@@ -223,6 +235,8 @@ El consumo del día se ve en vivo en `/admin`.
 | Todo devuelve 503 | La web está apagada | Púlsale a *Encender* en `/admin` |
 | La sesión se cae al recargar | `COOKIE_SECURE=true` sobre http | En local pon `COOKIE_SECURE=false` |
 | Los enlaces del email apuntan a localhost | `PUBLIC_BASE_URL` sin actualizar | Pon la URL pública real |
+| **Error 1033** de Cloudflare al abrir el enlace del email | `PUBLIC_BASE_URL` tiene la URL de un túnel anterior ya muerto | Cópiale la URL del túnel que está corriendo ahora y `docker compose up -d app` |
+| El usuario se queda en "Esperando autorización" aunque el panel muestre su sesión corriendo | Respuesta cacheada de `/auth/status` | Corregido: todo lo que sirve la puerta va con `no-store`. Si usas una imagen anterior, actualízala |
 | `no such file /models/nli-onnx/model.onnx` | Imagen construida a medias | Reconstruye sin caché: `docker build --no-cache .` |
 | El túnel no conecta con la app | Service mal puesto | Debe ser `http://app:8000`, no `localhost` |
 | El límite de intentos se agota con un solo usuario | `TRUST_PROXY_HEADERS=false` tras el túnel | Ponlo en `true`: si no, todas las visitas llegan con la IP de `cloudflared` y comparten cupo. `docker-compose.yml` ya lo hace por ti |

@@ -124,7 +124,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadSessionState() {
         try {
-            const state = await (await fetch("/auth/state", { credentials: "same-origin" })).json();
+            const state = await (await fetch(`/auth/state?_=${Date.now()}`,
+                { credentials: "same-origin", cache: "no-store" })).json();
             if (!state.has_session || !state.web_enabled) { window.location.href = "/"; return; }
             secondsLeft = state.seconds_left;
         } catch (e) {
@@ -195,7 +196,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const response = await fetch(endpoint, {
                 method: "POST",
                 body: formData,
-                credentials: "same-origin"
+                credentials: "same-origin",
+                cache: "no-store"
             });
 
             // The session may have expired or been revoked mid-request; the
