@@ -113,7 +113,8 @@ let pollTimer = null, tickTimer = null, deadline = 0;
 
 async function boot() {
   try {
-    const state = await (await fetch("/auth/state", { credentials: "same-origin" })).json();
+    const state = await (await fetch("/auth/state",
+      { credentials: "same-origin", cache: "no-store" })).json();
     if (state.has_session) { location.href = "/"; return; }
     show(state.web_enabled ? "form" : "offline");
   } catch {
@@ -133,6 +134,7 @@ document.getElementById("gate-form").addEventListener("submit", async (event) =>
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
+      cache: "no-store",
       body: JSON.stringify({
         name: document.getElementById("name").value.trim(),
         password: document.getElementById("password").value,
@@ -171,8 +173,12 @@ function startWaiting(requestId, expiresIn) {
 
   pollTimer = setInterval(async () => {
     try {
-      const response = await fetch(`/auth/status?request_id=${encodeURIComponent(requestId)}`,
-        { credentials: "same-origin" });
+      // The cache-busting parameter matters: without it a browser or CDN can
+      // replay the first "pending" answer forever, leaving the visitor stuck
+      // on this screen while their session is already live on the server.
+      const response = await fetch(
+        `/auth/status?request_id=${encodeURIComponent(requestId)}&_=${Date.now()}`,
+        { credentials: "same-origin", cache: "no-store" });
       const data = await response.json();
       if (data.status === "approved") { clearTimers(); location.href = "/"; }
       else if (data.status === "denied") stopWaiting("El administrador ha rechazado el acceso.", "err");
