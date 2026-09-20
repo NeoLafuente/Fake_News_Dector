@@ -1,32 +1,55 @@
 [project]
-name = "nlp"
-version = "0.1.0"
-description = "Add your description here"
+name = "fake-news-detector"
+version = "0.2.0"
+description = "Agentic fact-checking pipeline with owner-approved, time-limited access"
 readme = "README.md"
 requires-python = ">=3.13"
+
+# Runtime dependencies. Kept in sync with requirements-serve.txt, which is what
+# the Docker image installs. Nothing here pulls in torch.
 dependencies = [
-    "gensim",
-    "nltk",
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.34,<1.0",
+    "python-multipart>=0.0.20",
+    "python-dotenv>=1.0",
+    "pydantic>=2.9,<3.0",
+    "itsdangerous>=2.2,<3.0",
+    "langgraph>=0.3,<2.0",
+    "langchain-core>=0.3,<1.0",
+    "langchain-google-genai>=2.0",
+    "requests>=2.32",
+    "ddgs>=9.0",
+    "yt-dlp>=2025.1.1",
+    "onnxruntime>=1.20,<2.0",
+    "transformers>=4.45,<6.0",
+    "sentencepiece>=0.2.0",
+    "numpy>=1.26,<3.0",
+]
+
+[project.optional-dependencies]
+# Needed only to export the NLI model to ONNX; runs in the Docker builder stage.
+export = [
+    "optimum[onnxruntime]>=1.23",
+    "torch>=2.0",
+]
+
+# The notebook / evaluation environment. See requirements.txt for the full pin
+# set. Deliberately excluded from the published image.
+research = [
+    "jupyter>=1.1.1",
+    "mlflow>=3.10.0",
+    "optuna>=4.7.0",
     "scikit-learn",
     "matplotlib",
     "seaborn",
-    "numpy",
-    "scipy",
-    "pyevall>=0.1.78",
-    "jupyter>=1.1.1",
-    "lab>=8.8",
-    "optuna>=4.7.0",
-    "mlflow>=3.10.0",
-    "yt-dlp>=2026.3.17",
-    "torch>=2.10.0",
-    "torchaudio>=2.10.0",
-    "langgraph>=1.1.2",
-    "langchain-google-genai>=4.2.1",
-    "sentence-transformers>=5.3.0",
-    "openai-whisper>=20250625",
-    "python-multipart>=0.0.22",
-    "jiwer>=4.0.0",
+    "gensim",
+    "nltk",
     "datasets<4.0.0",
+    "jiwer>=4.0.0",
     "librosa>=0.11.0",
     "soundfile>=0.13.1",
+    "openai-whisper>=20250625",
+    "sentence-transformers>=5.3.0",
+    "torch>=2.10.0",
+    "torchaudio>=2.10.0",
 ]

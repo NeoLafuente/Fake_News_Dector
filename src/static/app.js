@@ -117,6 +117,39 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // Session countdown
+    const countdownEl = document.getElementById("session-countdown");
+    const btnLogout = document.getElementById("btn-logout");
+    let secondsLeft = 0;
+
+    async function loadSessionState() {
+        try {
+            const state = await (await fetch("/auth/state", { credentials: "same-origin" })).json();
+            if (!state.has_session || !state.web_enabled) { window.location.href = "/"; return; }
+            secondsLeft = state.seconds_left;
+        } catch (e) {
+            console.error("No se pudo leer el estado de sesión", e);
+        }
+    }
+
+    setInterval(() => {
+        if (secondsLeft <= 0) return;
+        secondsLeft -= 1;
+        const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
+        const ss = String(secondsLeft % 60).padStart(2, "0");
+        countdownEl.textContent = `${mm}:${ss}`;
+        if (secondsLeft <= 0) window.location.href = "/";
+    }, 1000);
+
+    // Re-sync with the server so a revoked session is noticed quickly.
+    setInterval(loadSessionState, 20000);
+    loadSessionState();
+
+    btnLogout.addEventListener("click", async () => {
+        await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
+        window.location.href = "/";
+    });
+
     // Action Handlers
     btnTranscribe.addEventListener("click", () => submitJob("/transcribe_only", "Extracting Audio & Transcribing..."));
     btnFactcheck.addEventListener("click", () => submitJob("/process_url", "Agents are extracting facts and evaluating truthfulness..."));
@@ -161,8 +194,16 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const response = await fetch(endpoint, {
                 method: "POST",
-                body: formData
+                body: formData,
+                credentials: "same-origin"
             });
+
+            // The session may have expired or been revoked mid-request; the
+            // gate page is the only sensible place to land.
+            if (response.status === 401 || response.status === 503) {
+                window.location.href = "/";
+                return;
+            }
 
             const data = await response.json();
 
@@ -213,7 +254,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px;">
                         <span class="fact-badge">${fact.label}</span>
-                        <span style="font-size: 0.8rem; color: var(--text-secondary);">Aggregated from search results</span>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary);">
+                            ${fact.confidence ? `Confidence ${(fact.confidence * 100).toFixed(0)}%` : "Aggregated from search results"}
+                        </span>
                     </div>
                 `;
                 factsList.appendChild(item);

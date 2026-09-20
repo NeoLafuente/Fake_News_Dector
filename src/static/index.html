@@ -13,6 +13,20 @@
     <div class="glow-orb orb-2"></div>
 
     <div class="container glass-panel">
+        <div id="session-bar" style="display:flex;align-items:center;justify-content:space-between;
+             gap:12px;flex-wrap:wrap;padding:10px 14px;margin-bottom:22px;border-radius:12px;
+             background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.35);font-size:.85rem">
+            <span style="color:var(--text-secondary)">
+                Sesión autorizada · quedan
+                <strong id="session-countdown" style="color:#fff;font-variant-numeric:tabular-nums">--:--</strong>
+            </span>
+            <button type="button" id="btn-logout"
+                    style="background:transparent;border:1px solid var(--panel-border);color:var(--text-secondary);
+                           border-radius:8px;padding:6px 12px;font-family:inherit;font-size:.8rem;cursor:pointer">
+                Salir
+            </button>
+        </div>
+
         <header>
             <h1>Fact<span>X</span> Agent</h1>
             <p>AI-Powered Audio Extraction & Fact Checking Ecosystem</p>
@@ -91,6 +105,6 @@
         </main>
     </div>
 
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=3"></script>
 </body>
 </html>

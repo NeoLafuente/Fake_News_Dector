@@ -1,6 +1,5 @@
 import os
 import sys
-import shutil
 from typing import Optional
 
 # Add the project root to sys.path so 'src' can be imported easily from anywhere
@@ -8,158 +7,198 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Load environment variables (like API keys)
 load_dotenv()
 
-from src.data_ingestion_transcription.audio_extractor import AudioExtractor
-from src.agent_orchestrator.graph import build_graph
-from src.agent_orchestrator.state import GraphState
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-app = FastAPI(title="Fact Detection System API")
+from src.security import budget, middleware, routes_admin, routes_auth, store
+from src.security.config import settings
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Refuse to boot unprotected: no secret key, no password, no admin token, no app.
+settings.require()
+store.init()
+
+app = FastAPI(
+    title="Fact Detection System API",
+    description="Agentic fact-checking behind owner-approved, time-limited sessions.",
 )
 
-class URLRequest(BaseModel):
-    url: str
+# Same-origin only. The previous wildcard let any site drive the API with a
+# visitor's cookie.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.public_base_url],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Admin-Token"],
+)
+
+middleware.install(app)
+app.include_router(routes_auth.router)
+app.include_router(routes_admin.router)
+
+static_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(static_path, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_path), name="static")
+
 
 class TextRequest(BaseModel):
-    transcript: str
+    transcript: str = Field(min_length=1)
 
-# Initialize AudioExtractor at startup to load Whisper
-# You can change model size. 'base' takes ~1GB VRAM/RAM
-audio_extractor = AudioExtractor("large-v3")
 
-# Build the LangGraph application
-graph_app = build_graph()
+# Both are expensive to construct, so they are built on first use rather than
+# at import time — it keeps cold starts short and lets the app boot without keys.
+_audio_extractor = None
+_graph_app = None
+
+
+def get_audio_extractor():
+    global _audio_extractor
+    if _audio_extractor is None:
+        from src.data_ingestion_transcription.audio_extractor import AudioExtractor
+
+        _audio_extractor = AudioExtractor()
+    return _audio_extractor
+
+
+def get_graph():
+    global _graph_app
+    if _graph_app is None:
+        from src.agent_orchestrator.graph import build_graph
+
+        _graph_app = build_graph()
+    return _graph_app
+
+
+def consume_run(request: Request) -> str:
+    """Charge one analysis against the caller's session quota."""
+    sid = middleware.current_session_id(request)
+    if sid is None:
+        raise HTTPException(status_code=401, detail="Sesión no válida.")
+    used = store.bump_session_runs(sid)
+    if used > settings.max_runs_per_session:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Has agotado los {settings.max_runs_per_session} análisis de esta sesión.",
+        )
+    return sid
+
+
+def run_pipeline(transcript: str) -> dict:
+    initial_state = {
+        "raw_transcript": transcript,
+        "extracted_facts": [],
+        "search_results": {},
+        "final_nli_analysis": [],
+    }
+    result_state = get_graph().invoke(initial_state)
+    return {"transcript": transcript, "results": result_state["final_nli_analysis"]}
+
+
+@app.exception_handler(budget.BudgetExceeded)
+async def budget_handler(request: Request, exc: budget.BudgetExceeded):
+    return JSONResponse({"detail": str(exc), "code": "budget_exceeded"}, status_code=429)
+
+
+@app.get("/health", include_in_schema=False)
+async def health():
+    return {"status": "ok", "web_enabled": store.is_web_enabled()}
+
 
 @app.post("/transcribe_only")
-async def transcribe_only_endpoint(
+def transcribe_only_endpoint(  # sync on purpose: runs in the threadpool
+    request: Request,
     url: Optional[str] = Form(None),
-    file: Optional[UploadFile] = File(None)
+    file: Optional[UploadFile] = File(None),
 ):
-    """
-    Endpoint to transcribe either a video URL or an uploaded audio/video file.
-    """
+    """Transcribe a media URL or an uploaded file, skipping the agent pipeline."""
+    consume_run(request)
+    extractor = get_audio_extractor()
     try:
         if file:
-            print(f"Transcribing uploaded file: {file.filename}")
-            os.makedirs("downloads", exist_ok=True)
-            file_path = os.path.join("downloads", file.filename)
-            
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-                
-            transcript = audio_extractor.transcribe(file_path)
-            
-            return {"transcript": transcript}
-            
-        elif url:
-            print(f"Transcribing URL: {url}")
-            transcript = audio_extractor.process_url(url)
-            
-            return {"transcript": transcript}
-            
-        else:
-            raise HTTPException(status_code=400, detail="Debes proporcionar una URL o subir un archivo de audio/video.")
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            path = extractor.save_upload(file)
+            try:
+                return {"transcript": extractor.transcribe(path)}
+            finally:
+                os.path.exists(path) and os.remove(path)
+        if url:
+            return {"transcript": extractor.process_url(url)}
+        raise HTTPException(status_code=400, detail="Debes proporcionar una URL o subir un archivo.")
+    except budget.BudgetExceeded:
+        raise
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 @app.post("/process_url")
-async def process_url_endpoint(
+def process_url_endpoint(  # sync on purpose: runs in the threadpool
+    request: Request,
     url: Optional[str] = Form(None),
-    file: Optional[UploadFile] = File(None)
+    file: Optional[UploadFile] = File(None),
 ):
-    """
-    Endpoint to process a video URL or audio File through the entire pipeline.
-    """
+    """Full pipeline: ingest, transcribe, extract claims, search, evaluate."""
+    consume_run(request)
+    extractor = get_audio_extractor()
     try:
         if file:
-            print(f"Processing uploaded file: {file.filename}")
-            os.makedirs("downloads", exist_ok=True)
-            file_path = os.path.join("downloads", file.filename)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            transcript = audio_extractor.transcribe(file_path)
-            
+            path = extractor.save_upload(file)
+            try:
+                transcript = extractor.transcribe(path)
+            finally:
+                os.path.exists(path) and os.remove(path)
         elif url:
-            print(f"Processing URL: {url}")
-            transcript = audio_extractor.process_url(url)
-            
+            transcript = extractor.process_url(url)
         else:
             raise HTTPException(status_code=400, detail="Debes proporcionar una URL o subir un archivo.")
 
-        # Phase 2 & 3: Fact Checking Pipeline
-        print("Starting Agent Ecosystem...")
-        initial_state = {
-            "raw_transcript": transcript,
-            "extracted_facts": [],
-            "search_results": {},
-            "final_nli_analysis": []
-        }
-        
-        result_state = graph_app.invoke(initial_state)
-        
-        return {
-            "transcript": transcript,
-            "results": result_state["final_nli_analysis"]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return run_pipeline(transcript)
+    except budget.BudgetExceeded:
+        raise
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 @app.post("/analyze_text")
-async def analyze_text_endpoint(request: TextRequest):
-    """
-    Endpoint to directly analyze a raw transcript without downloading audio.
-    """
+def analyze_text_endpoint(payload: TextRequest, request: Request):  # threadpool
+    """Run the agent pipeline directly on text, with no audio stage."""
+    consume_run(request)
     try:
-        # Phase 2 & 3: Fact Checking Pipeline
-        print("Starting Agent Ecosystem directly from text...")
-        initial_state = {
-            "raw_transcript": request.transcript,
-            "extracted_facts": [],
-            "search_results": {},
-            "final_nli_analysis": []
-        }
-        
-        result_state = graph_app.invoke(initial_state)
-        
-        return {
-            "transcript": request.transcript,
-            "results": result_state["final_nli_analysis"]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return run_pipeline(payload.transcript)
+    except budget.BudgetExceeded:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-static_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-if not os.path.exists(static_path):
-    os.makedirs(static_path)
-
-app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(content=b"", media_type="image/x-icon")
 
-@app.get("/")
-async def serve_frontend():
-    return FileResponse(os.path.join(static_path, "index.html"))
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend(request: Request):
+    """The app itself for an approved session, the gate for everyone else."""
+    if store.is_web_enabled() and middleware.current_session_id(request) is not None:
+        return FileResponse(os.path.join(static_path, "index.html"))
+    return FileResponse(os.path.join(static_path, "login.html"))
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+
+    uvicorn.run(
+        "src.app:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8000")),
+        reload=os.environ.get("DEV_RELOAD", "false").lower() == "true",
+    )

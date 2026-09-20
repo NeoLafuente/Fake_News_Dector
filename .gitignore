@@ -181,3 +181,11 @@ cython_debug/
 .cursorindexingignore
 report/
 data/
+
+# --- Despliegue y estado en runtime ---
+.env
+.env.*
+!.env.example
+data/
+models/
+*.onnx

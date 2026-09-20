@@ -1,0 +1,17 @@
+# Local development overlay: builds from source and exposes the port directly.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#
+# Remember to set COOKIE_SECURE=false in .env when testing over plain http.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: factx:local
+    ports:
+      - "8000:8000"
+
+  cloudflared:
+    profiles: ["tunnel"]
